@@ -178,10 +178,9 @@ app.post('/build', async (req, res) => {
     }
 
     // ── 6. build.gradle ──
-    const buildGradle = `
+   const buildGradle = `
 plugins {
-    id 'fabric-loom' version '1.6-SNAPSHOT'
-    id 'maven-publish'
+    id 'fabric-loom' version '1.4.4'
 }
 
 version = '1.0.0'
@@ -192,13 +191,14 @@ base { archivesName = '${modId}' }
 repositories {
     mavenCentral()
     maven { url 'https://maven.fabricmc.net/' }
+    maven { url 'https://maven.minecraftforge.net/' }
 }
 
 dependencies {
-    minecraft "com.mojang:minecraft:${MC_VERSION}"
-    mappings "net.fabricmc:yarn:${MC_VERSION}+build.10:v2"
+    minecraft "com.mojang:minecraft:1.20.1"
+    mappings "net.fabricmc:yarn:1.20.1+build.10:v2"
     modImplementation "net.fabricmc:fabric-loader:0.15.6"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${FABRIC_API_VERSION}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.2+1.20.1"
 }
 
 java {
@@ -210,29 +210,6 @@ tasks.withType(JavaCompile).configureEach {
     options.release = 17
 }
 `;
-    fs.writeFileSync(path.join(tmpDir, 'build.gradle'), buildGradle);
-
-    // settings.gradle
-    fs.writeFileSync(path.join(tmpDir, 'settings.gradle'), `rootProject.name = '${modId}'`);
-
-    // gradle.properties
-    fs.writeFileSync(path.join(tmpDir, 'gradle.properties'), `
-org.gradle.jvmargs=-Xmx2G
-minecraft_version=${MC_VERSION}
-loader_version=0.15.6
-fabric_version=${FABRIC_API_VERSION}
-`);
-
-    // ── 7. קומפילציה עם Gradle ──
-    console.log(`[BUILD] Running gradle build in ${tmpDir}`);
-    
-    execSync('gradle build --no-daemon -x test', {
-      cwd: tmpDir,
-      timeout: 120000,
-      stdio: 'pipe',
-      env: { ...process.env, JAVA_HOME: process.env.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64' }
-    });
-
     // ── 8. מציאת ה-JAR שנבנה ──
     const libsDir = path.join(tmpDir, 'build/libs');
     const jarFiles = fs.readdirSync(libsDir).filter(f => f.endsWith('.jar') && !f.includes('sources'));
