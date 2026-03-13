@@ -180,7 +180,7 @@ app.post('/build', async (req, res) => {
     // ── 6. build.gradle ──
     const buildGradle = `
 plugins {
-    id 'fabric-loom' version '1.4-SNAPSHOT'
+    id 'fabric-loom' version '1.6-SNAPSHOT'
     id 'maven-publish'
 }
 
