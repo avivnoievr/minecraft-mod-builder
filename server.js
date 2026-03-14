@@ -176,15 +176,17 @@ org.gradle.jvmargs=-Xmx2G
 org.gradle.daemon=false
 `);
 
-    log('Running Gradle build...');
-    const result = spawnSync('gradle', ['build', '--no-daemon', '-x', 'test', '--stacktrace', '--info'], {
-      cwd: tmpDir,
-      timeout: 300000, // 5 דקות - הורדת MC לוקחת זמן בפעם הראשונה
+log('Running Gradle build...');
+    const result = spawnSync('./gradlew', ['build', '--no-daemon'], {
+      cwd: buildDir,
+      timeout: 600000, // 10 דקות
       encoding: 'utf8',
       env: {
         ...process.env,
+        // כאן איחדתי את כל ה-env לאובייקט אחד תקין:
+        GRADLE_OPTS: "-Xmx1024m -Xms512m", 
         GRADLE_USER_HOME: GRADLE_CACHE,
-        JAVA_HOME: process.env.JAVA_HOME || '/opt/java/openjdk',
+        JAVA_HOME: process.env.JAVA_HOME || '/opt/java/openjdk'
       }
     });
 
