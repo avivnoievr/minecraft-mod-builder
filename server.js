@@ -65,13 +65,11 @@ app.post('/build', (req, res) => {
     fs.mkdirSync(classesDir, { recursive: true });
 
     log('Compiling ' + javaFiles.length + ' Java files...');
-    const javacResult = spawnSync('javac', [
-      '-source', '17',
-      '-target', '17',
-      '-d', classesDir,
-      '-encoding', 'UTF-8',
-      '--release', '17',
-      ...javaFiles
+   const javacResult = spawnSync('javac', [
+  '--release', '17',
+  '-d', classesDir,
+  '-encoding', 'UTF-8',
+  ...javaFiles
     ], {
       timeout: 60000,
       encoding: 'utf8',
