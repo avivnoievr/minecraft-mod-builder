@@ -1,54 +1,83 @@
-const express = require('express');
-const { spawnSync } = require('child_process');
-const fs = require('fs-extra');
-const path = require('path');
-const app = express();
+import React, { useState, useEffect } from 'react';
+import { Zap, Package, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
+import { base44 } from '@/api/base44Client';
+import { toast } from 'sonner';
+import BuildDashboard from './BuildDashboard';
 
-app.use(express.json({ limit: '50mb' }));
+function ModExport({ project, onProjectRefresh }) {
+  const [building, setBuilding] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
-app.post('/build', async (req, res) => {
-    const { files, modId } = req.body;
-    const buildId = `build_${Date.now()}`;
-    const buildDir = path.join(__dirname, buildId);
-    
+  // פונקציית הבנייה - חייבת להיות async!
+  const buildJar = async () => {
+    setBuilding(true);
     try {
-        const pkgPath = 'src/main/java/com/buildmeamod';
-        await fs.ensureDir(path.join(buildDir, pkgPath));
-        
-        // יצירת קבצי ה-Java
-        for (const [name, content] of Object.entries(files)) {
-            if (name.endsWith('.java')) {
-                await fs.writeFile(path.join(buildDir, pkgPath, name), content);
-            }
-        }
+      // עדכון ה-Database לפני הבנייה
+      await base44.entities.ModProject.update(project.id, {
+        generated_files: project.generated_files || {},
+        status: 'building'
+      });
 
-        // הגדרות Gradle מינימליות
-        const buildGradle = `
-            plugins { id 'fabric-loom' version '1.4-SNAPSHOT' }
-            repositories { mavenCentral(); maven { url 'https://maven.fabricmc.net/' } }
-            dependencies { 
-                minecraft "com.mojang:minecraft:1.20.1"
-                mappings "net.fabricmc:yarn:1.20.1+build.10:v2"
-                modImplementation "net.fabricmc:fabric-loader:0.15.6"
-            }
-        `;
-        await fs.writeFile(path.join(buildDir, 'build.gradle'), buildGradle);
-        await fs.writeFile(path.join(buildDir, 'settings.gradle'), "rootProject.name = 'mod'");
-
-        // הרצת הבנייה
-        const result = spawnSync('./gradlew', ['build', '-Dorg.gradle.jvmargs=-Xmx400m'], { cwd: buildDir });
-
-        const jarPath = path.join(buildDir, `build/libs/mod-1.0.0.jar`);
-        if (fs.existsSync(jarPath)) {
-            res.download(jarPath);
-        } else {
-            res.status(500).send("Build failed. Gradle Log: " + result.stderr.toString());
-        }
-    } catch (e) {
-        res.status(500).send("Server Error: " + e.message);
+      const response = await base44.functions.invoke('buildModJar', { projectId: project.id });
+      
+      if (response.data?.success) {
+        setShowDashboard(true);
+        toast.success("Build Started Successfully!");
+      }
+    } catch (err) {
+      toast.error("Build Error: " + err.message);
     } finally {
-        setTimeout(() => fs.remove(buildDir), 10000); 
+      setBuilding(false);
     }
-});
+  };
 
-app.listen(process.env.PORT || 3000);
+  const fullReset = async () => {
+    setResetting(true);
+    try {
+      await base44.functions.invoke('hardResetRegistry', { projectId: project.id });
+      if (onProjectRefresh) await onProjectRefresh();
+      toast.success("System Reset Complete");
+    } catch (err) {
+      toast.error("Reset Failed");
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  if (showDashboard) {
+    return <BuildDashboard project={project} onBack={() => setShowDashboard(false)} />;
+  }
+
+  return (
+    <div className="p-8 bg-[#0D0D0D] min-h-full text-white">
+      <div className="max-w-3xl mx-auto">
+        <div className="flex items-center gap-3 mb-8">
+          <Zap className="text-[#39FF14]" />
+          <h2 className="text-2xl font-black italic">CLOUD EXPORTER</h2>
+        </div>
+
+        <button 
+          onClick={buildJar}
+          disabled={building}
+          className="w-full py-10 bg-gradient-to-r from-purple-600 to-[#39FF14] rounded-3xl font-black text-2xl mb-8 flex items-center justify-center gap-4"
+        >
+          {building ? <Loader2 className="animate-spin" /> : <Package size={32} />}
+          {building ? "BUILDING..." : "GENERATE MOD JAR"}
+        </button>
+
+        <div className="p-6 border border-red-500/20 rounded-2xl bg-red-500/5 flex justify-between items-center">
+          <div>
+            <p className="font-bold text-red-400">Deep System Reset</p>
+            <p className="text-xs text-white/40">Use this to fix "Service Crashed" errors.</p>
+          </div>
+          <button onClick={fullReset} className="px-6 py-2 bg-red-500/20 border border-red-500/40 rounded-xl text-red-500 font-bold">
+            {resetting ? "RESETTING..." : "RESET NOW"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default ModExport;
