@@ -100,10 +100,10 @@ app.post('/build', async (req, res) => {
             await fs.remove(tmpDir).catch(e => console.error('Cleanup failed:', e));
         });
 
-    } catch (err) {
+} catch (err) {
         log(`FATAL: ${err.message}`);
-        if (tmpDir) await fs.remove(tmpDir).catch(() => {});
-        res.status(500).json({ error: err.message, logs });
+        // חובה להחזיר JSON תמיד!
+        res.status(500).json({ success: false, error: err.message, logs });
     }
 });
 
