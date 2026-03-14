@@ -7,20 +7,21 @@ app.use(express.json({ limit: '50mb' }));
 
 app.post('/build', async (req, res) => {
     const { files, modId } = req.body;
-    const buildDir = path.join(__dirname, `build_${Date.now()}`);
+    const buildId = `build_${Date.now()}`;
+    const buildDir = path.join(__dirname, buildId);
     
     try {
-        // יצירת מבנה תיקיות Fabric תקני
-        const srcDir = path.join(buildDir, 'src/main/java/com/buildmeamod');
-        await fs.ensureDir(srcDir);
+        const pkgPath = 'src/main/java/com/buildmeamod';
+        await fs.ensureDir(path.join(buildDir, pkgPath));
         
-        // כתיבת קבצי ה-Java
+        // כתיבת קבצי ה-Java למבנה תיקיות נכון
         for (const [name, content] of Object.entries(files)) {
-            if (name.endsWith('.java')) await fs.writeFile(path.join(srcDir, name), content);
+            if (name.endsWith('.java')) {
+                await fs.writeFile(path.join(buildDir, pkgPath, name), content);
+            }
         }
 
-        // קובץ build.gradle מותאם לזיכרון נמוך
-        const gradleContent = `
+        const buildGradle = `
             plugins { id 'fabric-loom' version '1.4-SNAPSHOT' }
             repositories { mavenCentral(); maven { url 'https://maven.fabricmc.net/' } }
             dependencies { 
@@ -29,23 +30,22 @@ app.post('/build', async (req, res) => {
                 modImplementation "net.fabricmc:fabric-loader:0.15.6"
             }
         `;
-        await fs.writeFile(path.join(buildDir, 'build.gradle'), gradleContent);
+        await fs.writeFile(path.join(buildDir, 'build.gradle'), buildGradle);
         await fs.writeFile(path.join(buildDir, 'settings.gradle'), "rootProject.name = 'mod'");
 
-        // הרצת הבנייה עם הגבלת זיכרון ל-JVM
+        // הרצה עם הגבלת זיכרון למניעת קריסת Railway
         const result = spawnSync('./gradlew', ['build', '-Dorg.gradle.jvmargs=-Xmx400m'], { cwd: buildDir });
 
         const jarPath = path.join(buildDir, `build/libs/mod-1.0.0.jar`);
         if (fs.existsSync(jarPath)) {
             res.download(jarPath);
         } else {
-            res.status(500).send("Build failed: JAR not created. Logs: " + result.stderr.toString());
+            res.status(500).send("Build failed. Logs: " + result.stderr.toString());
         }
     } catch (e) {
         res.status(500).send(e.message);
     } finally {
-        // ניקוי זמני
-        setTimeout(() => fs.remove(buildDir), 10000);
+        setTimeout(() => fs.remove(buildDir), 10000); // ניקוי לאחר 10 שניות
     }
 });
 
