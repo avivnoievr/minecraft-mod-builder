@@ -1,7 +1,7 @@
 const express = require('express');
 const fs = require('fs-extra');
 const path = require('path');
-const { spawn } = require('child_process'); // שינוי ל-Async
+const { spawn } = require('child_process');
 const os = require('os');
 
 const app = express();
@@ -11,7 +11,7 @@ const LOCKED_PKG = 'buildmeamod';
 const GRADLE_CACHE = path.join(os.tmpdir(), '.gradle-cache');
 fs.ensureDirSync(GRADLE_CACHE);
 
-app.get('/', (req, res) => res.json({ status: 'Online' }));
+app.get('/', (req, res) => res.json({ status: 'Online', engine: 'Gradle-Global' }));
 
 app.post('/build', async (req, res) => {
     const { modName, generated_files } = req.body;
@@ -33,37 +33,30 @@ app.post('/build', async (req, res) => {
         log(`Initializing build for: ${modId}`);
         await fs.ensureDir(tmpDir);
 
-        // בדיקה קריטית: האם קבצי התשתית קיימים לפני שמתחילים?
-        const infrastructure = ['gradlew', 'gradle', 'build.gradle', 'settings.gradle', 'gradle.properties'];
-        for (const file of infrastructure) {
-            const src = path.join(__dirname, file);
-            if (!(await fs.pathExists(src))) {
-                throw new Error(`Critical infrastructure file missing: ${file} at ${src}`);
-            }
-            await fs.copy(src, path.join(tmpDir, file));
-        }
-
-        if (process.platform !== 'win32') {
-            await fs.chmod(path.join(tmpDir, 'gradlew'), '755');
-        }
-
-        // יצירת מבנה תיקיות (קוצר בשביל הפוסט)
+        // --- שלב א': יצירת מבנה תיקיות ---
         const javaBase = path.join(tmpDir, 'src/main/java/com', LOCKED_PKG);
-        await fs.ensureDir(path.join(javaBase, 'registry'));
+        const resBase = path.join(tmpDir, 'src/main/resources');
         
-        // כתיבת קבצים
+        await fs.ensureDir(path.join(javaBase, 'registry'));
+        await fs.ensureDir(path.join(resBase, 'assets', modId));
+
+        // --- שלב ב': כתיבת קבצים מה-generated_files ---
         for (const [name, content] of Object.entries(generated_files)) {
-            const destPath = name.endsWith('.java') ? path.join(javaBase, name) : path.join(tmpDir, name);
+            // התאמת נתיבים: אם זה קובץ Java, נשים אותו בתיקיית המקור
+            let destPath;
+            if (name.endsWith('.java')) {
+                destPath = path.join(javaBase, name === 'Main.java' ? '' : 'registry', name);
+            } else {
+                destPath = path.join(tmpDir, name);
+            }
+            
             await fs.ensureDir(path.dirname(destPath));
             await fs.writeFile(destPath, content);
         }
 
-        log('Starting Gradle build process...');
+        log('Starting Global Gradle build process...');
 
-        // הרצה אסינכרונית כדי לא לתקוע את השרת
-    // אנחנו מורידים את ה-./ ומריצים ישירות את ה-gradle שקיים ב-Dockerfile
-log('Executing Gradle build (using global gradle)...');
-
+        // --- שלב ג': הרצת Gradle המותקן ב-Dockerfile ---
         const child = spawn('gradle', ['build', '--no-daemon'], {
             cwd: tmpDir,
             env: {
@@ -75,33 +68,42 @@ log('Executing Gradle build (using global gradle)...');
 
         child.stdout.on('data', (data) => log(`[GRADLE] ${data}`));
         child.stderr.on('data', (data) => log(`[ERROR] ${data}`));
+
         child.on('close', async (code) => {
             if (code !== 0) {
-                return res.status(500).json({ success: false, error: 'Build Failed', logs });
+                return res.status(500).json({ success: false, error: `Gradle exited with code ${code}`, logs });
             }
 
             const libsDir = path.join(tmpDir, 'build/libs');
-            const jarFiles = (await fs.readdir(libsDir)).filter(f => f.endsWith('.jar') && !f.includes('-dev'));
-
-            if (jarFiles.length === 0) {
-                return res.status(500).json({ error: 'JAR not found', logs });
+            if (!(await fs.pathExists(libsDir))) {
+                return res.status(500).json({ error: 'Build directory not found', logs });
             }
 
-            const jarBuffer = await fs.readFile(path.join(libsDir, jarFiles[0]));
+            const files = await fs.readdir(libsDir);
+            const jarFile = files.find(f => f.endsWith('.jar') && !f.includes('-dev') && !f.includes('-sources'));
+
+            if (!jarFile) {
+                return res.status(500).json({ error: 'No valid JAR found', logs });
+            }
+
+            const jarBuffer = await fs.readFile(path.join(libsDir, jarFile));
             res.json({
                 success: true,
+                file_name: jarFile,
                 jar_base64: jarBuffer.toString('base64'),
                 logs
             });
 
-            // ניקוי
-            await fs.remove(tmpDir);
+            // ניקוי תיקייה זמנית
+            await fs.remove(tmpDir).catch(e => console.error('Cleanup failed:', e));
         });
 
     } catch (err) {
         log(`FATAL: ${err.message}`);
+        if (tmpDir) await fs.remove(tmpDir).catch(() => {});
         res.status(500).json({ error: err.message, logs });
     }
 });
 
-app.listen(process.env.PORT || 8080, '0.0.0.0');
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, '0.0.0.0', () => console.log(`Server listening on port ${PORT}`));
