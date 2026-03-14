@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17-jdk
+FROM gradle:8.5-jdk17
 
 WORKDIR /app
 
