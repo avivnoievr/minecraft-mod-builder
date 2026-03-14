@@ -1,22 +1,17 @@
-# משתמשים בגרסה עדכנית של Node
-FROM node:18
+FROM eclipse-temurin:17-jdk
 
-# מתקינים את Java (כי אנחנו צריכים Gradle לבניית המוד)
-RUN apt-get update && apt-get install -y openjdk-17-jdk
-
-# הגדרת תיקיית עבודה
 WORKDIR /app
 
-# העתקת קבצי החבילות והתקנה
-COPY package*.json ./
+RUN apt-get update && apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY package.json .
 RUN npm install
 
-# העתקת כל שאר הקבצים
-COPY . .
+COPY server.js .
 
-# הגדרת משתנה סביבה לפורט של Railway
-ENV PORT=3000
 EXPOSE 3000
 
-# פקודת ההרצה
 CMD ["node", "server.js"]
