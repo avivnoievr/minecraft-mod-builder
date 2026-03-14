@@ -22,7 +22,7 @@ app.post('/build', async (req, res) => {
             }
         }
 
-        // קבצי הגדרות בסיסיים ל-Fabric
+        // הגדרות Gradle מינימליות
         const buildGradle = `
             plugins { id 'fabric-loom' version '1.4-SNAPSHOT' }
             repositories { mavenCentral(); maven { url 'https://maven.fabricmc.net/' } }
@@ -35,20 +35,19 @@ app.post('/build', async (req, res) => {
         await fs.writeFile(path.join(buildDir, 'build.gradle'), buildGradle);
         await fs.writeFile(path.join(buildDir, 'settings.gradle'), "rootProject.name = 'mod'");
 
-        // הרצה עם הגבלת זיכרון ל-Railway
+        // הרצת הבנייה
         const result = spawnSync('./gradlew', ['build', '-Dorg.gradle.jvmargs=-Xmx400m'], { cwd: buildDir });
 
         const jarPath = path.join(buildDir, `build/libs/mod-1.0.0.jar`);
         if (fs.existsSync(jarPath)) {
             res.download(jarPath);
         } else {
-            res.status(500).send("Build failed. Logs: " + result.stderr.toString());
+            res.status(500).send("Build failed. Gradle Log: " + result.stderr.toString());
         }
     } catch (e) {
-        res.status(500).send(e.message);
+        res.status(500).send("Server Error: " + e.message);
     } finally {
-        // ניקוי הקבצים לאחר 10 שניות
-        setTimeout(() => fs.remove(buildDir), 10000);
+        setTimeout(() => fs.remove(buildDir), 10000); 
     }
 });
 
