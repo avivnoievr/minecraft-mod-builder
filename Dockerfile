@@ -1,19 +1,8 @@
 FROM gradle:8.5-jdk17
-
+USER root
+RUN apt-get update && apt-get install -y nodejs npm
 WORKDIR /app
-
-# התקנת Node.js
-RUN apt-get update && apt-get install -y curl && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# העתקת קבצי השרת
 COPY package.json .
 RUN npm install
-
-COPY server.js .
-
-EXPOSE 3000
-
+COPY . .
 CMD ["node", "server.js"]
