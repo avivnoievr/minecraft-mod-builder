@@ -62,18 +62,19 @@ app.post('/build', async (req, res) => {
 
         // הרצה אסינכרונית כדי לא לתקוע את השרת
     // אנחנו מורידים את ה-./ ומריצים ישירות את ה-gradle שקיים ב-Dockerfile
-const child = spawn('gradle', ['build', '--no-daemon'], { ... });
+log('Executing Gradle build (using global gradle)...');
+
+        const child = spawn('gradle', ['build', '--no-daemon'], {
             cwd: tmpDir,
-            env: { 
-                ...process.env, 
-                GRADLE_OPTS: "-Xmx512m", // הורדתי ל-512MB כדי למנוע קריסה בשרתים חלשים
-                GRADLE_USER_HOME: GRADLE_CACHE 
+            env: {
+                ...process.env,
+                GRADLE_OPTS: "-Xmx1024m -Xms512m",
+                GRADLE_USER_HOME: GRADLE_CACHE
             }
         });
 
-        child.stdout.on('data', (data) => log(`STDOUT: ${data}`));
-        child.stderr.on('data', (data) => log(`STDERR: ${data}`));
-
+        child.stdout.on('data', (data) => log(`[GRADLE] ${data}`));
+        child.stderr.on('data', (data) => log(`[ERROR] ${data}`));
         child.on('close', async (code) => {
             if (code !== 0) {
                 return res.status(500).json({ success: false, error: 'Build Failed', logs });
