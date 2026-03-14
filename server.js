@@ -19,167 +19,81 @@ fs.mkdirSync(GRADLE_CACHE, { recursive: true });
 
 app.get('/', (req, res) => res.json({ status: 'ok' }));
 
-app.post('/build', (req, res) => {
-  const { projectId, modName, generated_files } = req.body;
-  if (!generated_files || !modName) {
-    return res.status(400).json({ error: 'Missing modName or generated_files' });
-  }
+app.post('/build', async (req, res) => {
+    const { modName, generated_files, projectId } = req.body;
+    const tmpDir = path.join('/tmp', `build-${projectId}-${Date.now()}`);
+    const GRADLE_CACHE = '/tmp/.gradle-cache';
 
-  const modId = (modName || 'mymod').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'mymod';
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mod-'));
-  const logs = [];
-  const log = (msg) => { logs.push(msg); console.log('[BUILD] ' + msg); };
+    try {
+        console.log(`[${new Date().toISOString()}] Starting build for: ${modName}`);
+        
+        // 1. יצירת מבנה התיקיות
+        const pkgPath = 'src/main/java/com/aviv/mod';
+        await fs.ensureDir(path.join(tmpDir, pkgPath));
+        await fs.ensureDir(GRADLE_CACHE);
 
-  try {
-    log('Starting: ' + modId);
+        // 2. כתיבת קבצי ה-Java שנוצרו
+        for (const [name, content] of Object.entries(generated_files)) {
+            await fs.writeFile(path.join(tmpDir, pkgPath, `${name}.java`), content);
+        }
 
-    const gf = generated_files;
-    const srcDir = path.join(tmpDir, 'src', 'main', 'java', 'com', LOCKED_PKG);
-    const resDir = path.join(tmpDir, 'src', 'main', 'resources');
+        // 3. הרצת Gradle - השילוב המנצח של כל הפונקציות
+        console.log('Running Gradle build with RAM limits...');
+        const result = spawnSync('./gradlew', [
+            'build', 
+            '--no-daemon',    // מונע השארת תהליכים פתוחים שזוללים RAM
+            '-x', 'test',     // מדלג על בדיקות מיותרות
+            '--stacktrace',   // מראה שגיאות מפורטות אם נכשל
+            '--info'          // נותן לנו לוגים בזמן אמת
+        ], {
+            cwd: tmpDir,
+            timeout: 600000, // 10 דקות (הגדלנו בגלל ה-Timeout שראינו)
+            encoding: 'utf8',
+            env: {
+                ...process.env,
+                // הגבלת זיכרון חכמה: Xmx זה המקסימום, Xms זה ההתחלה
+                GRADLE_OPTS: "-Xmx1200m -Xms512m -Dorg.gradle.jvmargs=-Xmx1200m",
+                GRADLE_USER_HOME: GRADLE_CACHE, // שימוש בתיקיית ה-Cache שחוסכת זמן
+                JAVA_HOME: process.env.JAVA_HOME || '/opt/java/openjdk',
+            }
+        });
 
-    // יצירת תיקיות
-    for (const d of [
-      path.join(srcDir, 'registry'),
-      path.join(srcDir, 'item'),
-      path.join(srcDir, 'block'),
-      path.join(srcDir, 'entity'),
-      path.join(resDir, 'assets', modId, 'models', 'item'),
-      path.join(resDir, 'assets', modId, 'models', 'block'),
-      path.join(resDir, 'assets', modId, 'blockstates'),
-      path.join(resDir, 'assets', modId, 'lang'),
-      path.join(resDir, 'assets', modId, 'textures', 'item'),
-      path.join(resDir, 'assets', modId, 'textures', 'block'),
-      path.join(resDir, 'data', modId, 'recipes'),
-      path.join(resDir, 'data', modId, 'loot_tables', 'blocks'),
-      path.join(resDir, 'data', modId, 'worldgen', 'configured_feature'),
-      path.join(resDir, 'data', modId, 'worldgen', 'placed_feature'),
-    ]) fs.mkdirSync(d, { recursive: true });
+        // 4. בדיקת תוצאה
+        if (result.status !== 0) {
+            console.error('Gradle build failed!');
+            return res.status(500).json({
+                success: false,
+                error: 'Build failed',
+                logs: result.stdout + result.stderr // שולחים הכל כדי שתוכל לראות ב-Dashboard
+            });
+        }
 
-    // כתיבת קבצי Java
-    const javaMap = {
-      'Main.java': gf.Main,
-      'registry/ModItems.java': gf.ModItems,
-      'registry/ModBlocks.java': gf.ModBlocks,
-      'registry/ModEntities.java': gf.ModEntities,
-      'item/TacticalCarbineItem.java': gf.TacticalCarbineItem,
-      'item/ModMaterialItem.java': gf.ModMaterialItem,
-      'block/ModOreBlock.java': gf.ModOreBlock,
-    };
-    const entityKey = gf._entity_class_key;
-    if (entityKey && gf[entityKey]) javaMap[`entity/${entityKey}.java`] = gf[entityKey];
+        // 5. איתור ה-JAR ושליחתו כ-Base64
+        const libsDir = path.join(tmpDir, 'build/libs');
+        const files = await fs.readdir(libsDir);
+        const jarFile = files.find(f => f.endsWith('.jar') && !f.includes('-dev') && !f.includes('-sources'));
 
-    let javaCount = 0;
-    for (const [file, content] of Object.entries(javaMap)) {
-      if (content) {
-        const fullPath = path.join(srcDir, file);
-        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-        fs.writeFileSync(fullPath, content, 'utf8');
-        javaCount++;
-      }
+        if (!jarFile) throw new Error("JAR file not found in build/libs");
+
+        const jarPath = path.join(libsDir, jarFile);
+        const jarBase64 = (await fs.readFile(jarPath)).toString('base64');
+
+        console.log('Build successful, sending JAR back...');
+        res.json({
+            success: true,
+            jar_base64: jarBase64,
+            file_name: jarFile,
+            logs: result.stdout
+        });
+
+    } catch (err) {
+        console.error('Server Error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    } finally {
+        // ניקוי תיקיית הבנייה כדי לא לסתום את הדיסק (אבל משאירים את ה-Cache!)
+        setTimeout(() => fs.remove(tmpDir).catch(console.error), 5000);
     }
-    log(`Wrote ${javaCount} Java files`);
-
-    // fabric.mod.json
-    fs.writeFileSync(path.join(resDir, 'fabric.mod.json'), JSON.stringify({
-      schemaVersion: 1, id: modId, version: '1.0.0', name: modName,
-      description: modName + ' mod', authors: ['MindrentAI'], license: 'MIT',
-      environment: '*',
-      entrypoints: { main: ['com.' + LOCKED_PKG + '.Main'] },
-      mixins: [],
-      depends: { fabricloader: '>=' + FABRIC_LOADER, fabric: '*', minecraft: '~' + MC_VERSION, java: '>=17' }
-    }, null, 2));
-
-    // assets
-    const tryParse = (s) => { try { return JSON.parse(s); } catch { return null; } };
-    if (gf.LanguageJson) fs.writeFileSync(path.join(resDir, 'assets', modId, 'lang', 'en_us.json'), gf.LanguageJson);
-
-    const itemModels = tryParse(gf.ItemModelJson);
-    if (itemModels) for (const [n, m] of Object.entries(itemModels))
-      if (!n.includes('/') && !n.startsWith('_'))
-        fs.writeFileSync(path.join(resDir, 'assets', modId, 'models', 'item', n + '.json'), JSON.stringify(m, null, 2));
-
-    const blockModels = tryParse(gf.BlockModelJson);
-    if (blockModels) for (const [n, m] of Object.entries(blockModels))
-      if (!n.startsWith('_'))
-        fs.writeFileSync(path.join(resDir, 'assets', modId, 'models', 'block', n + '.json'), JSON.stringify(m, null, 2));
-
-    const blockStates = tryParse(gf.BlockStateJson);
-    if (blockStates) for (const [n, s] of Object.entries(blockStates))
-      if (!n.startsWith('_'))
-        fs.writeFileSync(path.join(resDir, 'assets', modId, 'blockstates', n + '.json'), JSON.stringify(s, null, 2));
-
-    const oreBlock = (gf._registry_blocks || 'ore_block').split(',')[0];
-    if (gf.RecipeJson) fs.writeFileSync(path.join(resDir, 'data', modId, 'recipes', 'main.json'), gf.RecipeJson);
-    if (gf.LootTableJson) fs.writeFileSync(path.join(resDir, 'data', modId, 'loot_tables', 'blocks', oreBlock + '.json'), gf.LootTableJson);
-    if (gf.OreFeatureJson) fs.writeFileSync(path.join(resDir, 'data', modId, 'worldgen', 'configured_feature', oreBlock + '.json'), gf.OreFeatureJson);
-    if (gf.OrePlacementJson) fs.writeFileSync(path.join(resDir, 'data', modId, 'worldgen', 'placed_feature', oreBlock + '.json'), gf.OrePlacementJson);
-
-    if (gf._extra_data_files) {
-      const extra = typeof gf._extra_data_files === 'string' ? tryParse(gf._extra_data_files) : gf._extra_data_files;
-      if (extra) for (const [fp, content] of Object.entries(extra)) {
-        const fp2 = path.join(resDir, fp);
-        fs.mkdirSync(path.dirname(fp2), { recursive: true });
-        fs.writeFileSync(fp2, JSON.stringify(content, null, 2));
-      }
-    }
-
-    // settings.gradle - חובה שיהיה pluginManagement עם Fabric Maven
-    fs.writeFileSync(path.join(tmpDir, 'settings.gradle'), `
-pluginManagement {
-    repositories {
-        maven { url 'https://maven.fabricmc.net/' }
-        gradlePluginPortal()
-        mavenCentral()
-    }
-}
-rootProject.name = '${modId}'
-`);
-
-    // build.gradle
-    fs.writeFileSync(path.join(tmpDir, 'build.gradle'), `
-plugins {
-    id 'fabric-loom' version '1.4.4'
-}
-
-version = '1.0.0'
-group = 'com.${LOCKED_PKG}'
-base { archivesName = '${modId}' }
-
-repositories {
-    mavenCentral()
-    maven { url 'https://maven.fabricmc.net/' }
-}
-
-dependencies {
-    minecraft 'com.mojang:minecraft:${MC_VERSION}'
-    mappings "net.fabricmc:yarn:${YARN}:v2"
-    modImplementation 'net.fabricmc:fabric-loader:${FABRIC_LOADER}'
-    modImplementation 'net.fabricmc.fabric-api:fabric-api:${FABRIC_API}'
-}
-
-java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
-}
-
-tasks.withType(JavaCompile).configureEach {
-    options.release = 17
-    options.encoding = 'UTF-8'
-}
-
-// מונע בניית sources jar
-jar { from('LICENSE') }
-`);
-
-    fs.writeFileSync(path.join(tmpDir, 'gradle.properties'), `
-org.gradle.jvmargs=-Xmx400m
-org.gradle.daemon=false
-`);
-
-    log('Running Gradle build...');
-    const result = spawnSync('gradle', ['build', '--no-daemon', '-x', 'test', '--stacktrace', '--info'], {
-      cwd: tmpDir,
-      timeout: 300000, // 5 דקות - הורדת MC לוקחת זמן בפעם הראשונה
+5 דקות - הורדת MC לוקחת זמן בפעם הראשונה
       encoding: 'utf8',
       env: {
         ...process.env,
