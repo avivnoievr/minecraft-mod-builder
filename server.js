@@ -6,6 +6,8 @@ const os = require('os');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
+const cors = require('cors');
+app.use(cors()); // זה מאפשר לכל אתר (כולל Base44) לדבר עם השרת שלך
 
 const LOCKED_PKG = 'buildmeamod';
 const GRADLE_CACHE = path.join(os.tmpdir(), '.gradle-cache');
