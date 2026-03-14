@@ -172,7 +172,7 @@ jar { from('LICENSE') }
 `);
 
     fs.writeFileSync(path.join(tmpDir, 'gradle.properties'), `
-org.gradle.jvmargs=-Xmx2G
+org.gradle.jvmargs=-Xmx400m
 org.gradle.daemon=false
 `);
 
