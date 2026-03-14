@@ -164,7 +164,7 @@ tasks.withType(JavaCompile).configureEach {
 
     const output = (result.stdout || '') + (result.stderr || '');
     if (result.status !== 0) {
-      throw new Error('Gradle build failed:\n' + output.slice(0, 1000));
+    throw new Error('Gradle build failed:\n' + output.slice(0, 3000));
     }
 
     const libsDir = path.join(tmpDir, 'build', 'libs');
