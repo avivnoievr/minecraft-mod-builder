@@ -61,7 +61,8 @@ app.post('/build', async (req, res) => {
         log('Starting Gradle build process...');
 
         // הרצה אסינכרונית כדי לא לתקוע את השרת
-        const child = spawn('./gradlew', ['build', '--no-daemon'], {
+    // אנחנו מורידים את ה-./ ומריצים ישירות את ה-gradle שקיים ב-Dockerfile
+const child = spawn('gradle', ['build', '--no-daemon'], { ... });
             cwd: tmpDir,
             env: { 
                 ...process.env, 
