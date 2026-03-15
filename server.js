@@ -40,13 +40,32 @@ app.post('/build', async (req, res) => {
         console.log(logEntry);
     };
 
-    log(`>>> אישור קבלת בקשה לבניית מוד: ${modName || 'unknown'}`);
-    log(`>>> פרויקט מזהה: ${projectId || 'N/A'}`);
+    // שלב 1: פריסת הקבצים
+        log(`מתחיל כתיבת ${Object.keys(generated_files).length} קבצים למערכת הקבצים...`);
+        for (let [filePath, content] of Object.entries(generated_files)) {
+            
+            // תיקון נתיבים: אם הנתיב מתחיל ב- / נוריד אותו
+            if (filePath.startsWith('/')) filePath = filePath.substring(1);
+            
+            const dest = path.join(tmpDir, filePath);
+            await fs.ensureDir(path.dirname(dest));
+            
+            if (typeof content === 'string' && content.startsWith('data:image')) {
+                const base64Data = content.split(',')[1];
+                await fs.writeFile(dest, Buffer.from(base64Data, 'base64'));
+            } else {
+                await fs.writeFile(dest, content);
+            }
+        }
 
-    if (!generated_files || Object.keys(generated_files).length === 0) {
-        log("ERROR: לא התקבלו קבצי מקור לבנייה.");
-        return res.status(400).json({ success: false, error: 'Source files missing from request.' });
-    }
+        // בדיקה קריטית: האם build.gradle קיים?
+        if (!(await fs.pathExists(path.join(tmpDir, 'build.gradle')))) {
+            log("CRITICAL ERROR: build.gradle missing in workspace!");
+            // בוא נבדוק אם הוא נמצא בטעות בתיקיית משנה
+            const allFiles = Object.keys(generated_files);
+            log(`Available files: ${allFiles.join(', ')}`);
+            return res.status(400).json({ success: false, error: 'build.gradle not found in root', logs });
+        }
 
     // יצירת סביבת עבודה מבודדת
     const modId = (modName || 'mod').toLowerCase().replace(/[^a-z0-9]+/g, '_');
