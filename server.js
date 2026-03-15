@@ -53,13 +53,32 @@ app.post('/build', async (req, res) => {
             
             await fs.ensureDir(path.dirname(dest));
             
-            if (typeof content === 'string' && content.startsWith('data:image')) {
-                // המרת טקסטורות מ-Base64 לקובץ בינארי
-                const buffer = Buffer.from(content.split(',')[1], 'base64');
-                await fs.writeFile(dest, buffer);
-            } else {
-                await fs.writeFile(dest, content);
-            }
+           if (typeof content === 'string' && content.startsWith('data:image')) {
+    const buffer = Buffer.from(content.split(',')[1], 'base64');
+    await fs.writeFile(dest, buffer);
+} else if (typeof content === 'string' && content.startsWith('http')) {
+    try {
+        const https = require('https');
+        const http = require('http');
+        const client = content.startsWith('https') ? https : http;
+        await new Promise((resolve, reject) => {
+            client.get(content, (response) => {
+                const chunks = [];
+                response.on('data', chunk => chunks.push(chunk));
+                response.on('end', async () => {
+                    await fs.writeFile(dest, Buffer.concat(chunks));
+                    resolve();
+                });
+                response.on('error', reject);
+            }).on('error', reject);
+        });
+    } catch(e) {
+        console.warn(`Failed to download texture: ${content}`);
+        await fs.writeFile(dest, content);
+    }
+} else {
+    await fs.writeFile(dest, content);
+}
         }
 
         // 4. בדיקת תקינות Gradle Build
