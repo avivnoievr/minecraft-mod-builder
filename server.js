@@ -5,75 +5,173 @@ const { spawn } = require('child_process');
 const os = require('os');
 const cors = require('cors');
 
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: '100mb' }));
+/**
+ * מנוע בנייה למודים של מיינקראפט - גרסת High-Performance
+ * מותאם לשרת עם 8GB RAM ומערכת Base44
+ */
 
-app.get('/', (req, res) => res.send("ENGINE STATUS: ONLINE (8GB RAM MODE)"));
+const app = express();
+
+// הגדרות אבטחה ותקשורת
+app.use(cors());
+app.use(express.json({ limit: '150mb' })); // תמיכה בפרויקטים כבדים עם טקסטורות
+
+// ניהול זיכרון ומטמון - שימוש בתיקייה זמנית של המערכת
+const GRADLE_CACHE = path.join(os.tmpdir(), '.gradle-cache');
+fs.ensureDirSync(GRADLE_CACHE);
+
+app.get('/', (req, res) => {
+    res.status(200).send(`
+        <h1>Mod Builder Engine Status: ONLINE</h1>
+        <p>Memory Mode: 8GB Optimized</p>
+        <p>System Time: ${new Date().toISOString()}</p>
+    `);
+});
 
 app.post('/build', async (req, res) => {
-    const { modName, generated_files } = req.body;
+    const { modName, generated_files, projectId } = req.body;
     const logs = [];
-    const log = (msg) => { logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`); console.log(msg); };
-
-    if (!generated_files) return res.status(400).json({ success: false, error: 'No files provided' });
-
-    const tmpDir = path.join(os.tmpdir(), `build-${Date.now()}`);
     
+    // פונקציית לוג פנימית שמתעדת כל שלב במיקרו-שניות
+    const log = (msg) => {
+        const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        const logEntry = `[${timestamp}] ${msg}`;
+        logs.push(logEntry);
+        console.log(logEntry);
+    };
+
+    log(`>>> אישור קבלת בקשה לבניית מוד: ${modName || 'unknown'}`);
+    log(`>>> פרויקט מזהה: ${projectId || 'N/A'}`);
+
+    if (!generated_files || Object.keys(generated_files).length === 0) {
+        log("ERROR: לא התקבלו קבצי מקור לבנייה.");
+        return res.status(400).json({ success: false, error: 'Source files missing from request.' });
+    }
+
+    // יצירת סביבת עבודה מבודדת
+    const modId = (modName || 'mod').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    const buildTag = `build-${Date.now()}-${modId}`;
+    const tmpDir = path.join(os.tmpdir(), buildTag);
+
     try {
+        log(`יצירת תיקיית עבודה זמנית בנתיב: ${tmpDir}`);
         await fs.ensureDir(tmpDir);
-        log("Workspace ready. Writing files...");
 
-        for (const [name, content] of Object.entries(generated_files)) {
-            const p = path.join(tmpDir, name);
-            await fs.ensureDir(path.dirname(p));
-            await fs.writeFile(p, content);
+        // שלב 1: פריסת הקבצים
+        log(`מתחיל כתיבת ${Object.keys(generated_files).length} קבצים למערכת הקבצים...`);
+        for (const [relativeUrl, content] of Object.entries(generated_files)) {
+            const fullPath = path.join(tmpDir, relativeUrl);
+            await fs.ensureDir(path.dirname(fullPath));
+            
+            // זיהוי טקסטורות ב-Base64
+            if (typeof content === 'string' && content.startsWith('data:image')) {
+                const buffer = Buffer.from(content.split(',')[1], 'base64');
+                await fs.writeFile(fullPath, buffer);
+            } else {
+                await fs.writeFile(fullPath, content);
+            }
         }
+        log("שלב כתיבת הקבצים הסתיים בהצלחה.");
 
-        log("Launching Gradle build (Limit: 6GB RAM)...");
+        // שלב 2: הרצת Gradle
+        log(`מפעיל Gradle Daemon... הקצאת זיכרון: 6GB RAM (מתוך 8GB זמינים).`);
         
-        // הגדרת הזיכרון ל-6GB
-        const child = spawn('gradle', ['build', '--no-daemon'], {
+        // הגדרות Gradle קריטיות למניעת קריסות ב-Cloud
+        const gradleArgs = ['build', '--no-daemon', '--parallel', '--quiet'];
+        const child = spawn('gradle', gradleArgs, {
             cwd: tmpDir,
             env: { 
                 ...process.env, 
-                GRADLE_OPTS: "-Xmx6g -Xms1g" // מתחיל מ-1GB ויכול לעלות עד 6GB
+                // הקצאת 6GB ל-JVM כדי להשאיר 2GB למערכת ול-Node
+                GRADLE_OPTS: "-Xmx6g -Xms1g -Dorg.gradle.jvmargs=-Xmx6g",
+                GRADLE_USER_HOME: GRADLE_CACHE 
             }
         });
 
-        child.stdout.on('data', (d) => log(d.toString()));
-        child.stderr.on('data', (d) => log(`ERROR: ${d.toString()}`));
+        child.stdout.on('data', (data) => {
+            const output = data.toString().trim();
+            if (output) log(`[GRADLE] ${output}`);
+        });
+
+        child.stderr.on('data', (data) => {
+            const errOutput = data.toString().trim();
+            if (errOutput) log(`[GRADLE-WARN] ${errOutput}`);
+        });
+
+        // טיפול בשגיאת "Command not found" - קורה אם ה-Dockerfile לא תקין
+        child.on('error', (err) => {
+            log(`FATAL: נכשל ניסיון הרצת פקודת Gradle. וודא שהיא מותקנת ב-Path. שגיאה: ${err.message}`);
+            res.status(500).json({ success: false, error: "System environment error", logs });
+        });
 
         child.on('close', async (code) => {
+            log(`תהליך ה-Build הסתיים עם קוד יציאה: ${code}`);
+
             if (code !== 0) {
-                log(`Build failed with code ${code}`);
-                return res.status(500).json({ success: false, error: 'Build Failed', logs });
+                log("ERROR: הבנייה נכשלה. ראה לוגים למעלה לפרטים על שגיאות סינטקס ב-Java.");
+                return res.status(500).json({ 
+                    success: false, 
+                    error: 'Gradle build failed. Review build logs.', 
+                    logs 
+                });
             }
 
+            // שלב 3: איתור התוצר הסופי (JAR)
+            log("מבצע סריקה לאיתור קובץ ה-JAR שנוצר...");
             const libsDir = path.join(tmpDir, 'build/libs');
-            const files = await fs.readdir(libsDir);
-            const jar = files.find(f => f.endsWith('.jar') && !f.includes('-dev'));
+            
+            if (!(await fs.pathExists(libsDir))) {
+                log(`ERROR: תיקיית build/libs לא נוצרה. הבנייה כנראה לא הגיעה לסיומה.`);
+                return res.status(500).json({ success: false, error: 'Output directory missing', logs });
+            }
 
-            if (!jar) return res.status(500).json({ success: false, error: 'JAR not found', logs });
+            const outputFiles = await fs.readdir(libsDir);
+            const finalJar = outputFiles.find(f => f.endsWith('.jar') && !f.includes('-dev') && !f.includes('-sources'));
 
-            const jarBuffer = await fs.readFile(path.join(libsDir, jar));
-            const manifest = { files: Object.keys(generated_files), status: "PASS" };
+            if (!finalJar) {
+                log("ERROR: לא נמצא קובץ JAR תקין בתיקיית הפלט.");
+                return res.status(500).json({ success: false, error: 'JAR file not found', logs });
+            }
 
-            res.json({
+            log(`נמצא תוצר: ${finalJar}. מתחיל קידוד להעברה...`);
+            const jarBuffer = await fs.readFile(path.join(libsDir, finalJar));
+
+            // שלב 4: יצירת מניפסט (זה מה שמתקן את ה-Checklist באתר)
+            const manifest = {
+                modId: modId,
+                status: "PASS",
+                filesIncluded: Object.keys(generated_files),
+                totalFiles: Object.keys(generated_files).length,
+                buildTimestamp: new Date().toISOString(),
+                serverMemoryMode: "8GB_OPTIMIZED"
+            };
+
+            // שלב 5: תשובה סופית
+            log("--- תהליך הבנייה הושלם בהצלחה! שולח נתונים לאתר ---");
+            res.status(200).json({
                 success: true,
                 jar_base64: jarBuffer.toString('base64'),
-                file_name: jar,
+                file_name: finalJar,
                 manifest: manifest,
-                logs
+                logs: logs
             });
 
-            await fs.remove(tmpDir).catch(() => {});
+            // ניקוי תיקיות זמניות - כדי לא לסתום את הדיסק של Railway
+            await fs.remove(tmpDir).catch(e => console.error("Cleanup error:", e));
         });
+
     } catch (err) {
-        log(`CRITICAL: ${err.message}`);
+        log(`CRITICAL SYSTEM ERROR: ${err.message}`);
         res.status(500).json({ success: false, error: err.message, logs });
     }
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', () => console.log(`Heavy-Duty Server listening on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`
+    ================================================
+    BUILD ENGINE READY - 8GB RAM MODE ACTIVE
+    PORT: ${PORT}
+    ================================================
+    `);
+});
