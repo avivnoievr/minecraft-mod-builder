@@ -4,6 +4,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const os = require('os');
 const cors = require('cors');
+const sharp = require('sharp');
 
 const app = express();
 
@@ -14,6 +15,18 @@ app.use(express.json({ limit: '150mb' }));
 // הגדרת מטמון Gradle להאצת בנייה (בתיקייה זמנית)
 const GRADLE_CACHE = path.join(os.tmpdir(), '.gradle-cache');
 fs.ensureDirSync(GRADLE_CACHE);
+
+// ── פונקציה להמרת תמונה ל-16x16 פיקסל ארט ──
+async function resizeTo16x16(inputBuffer) {
+    return sharp(inputBuffer)
+        .resize(16, 16, {
+            kernel: 'nearest',    // שמירת פיקסלים חדים - בסגנון מיינקראפט
+            fit: 'cover',
+            position: 'centre'
+        })
+        .png()
+        .toBuffer();
+}
 
 app.get('/', (req, res) => {
     res.status(200).send("<h1>MOD BUILDER ENGINE v3.0 (8GB RAM MODE)</h1><p>Status: ONLINE</p>");
@@ -52,33 +65,56 @@ app.post('/build', async (req, res) => {
             const dest = path.join(tmpDir, filePath);
             
             await fs.ensureDir(path.dirname(dest));
+
+            const isTexture = dest.endsWith('.png');
             
-           if (typeof content === 'string' && content.startsWith('data:image')) {
-    const buffer = Buffer.from(content.split(',')[1], 'base64');
-    await fs.writeFile(dest, buffer);
-} else if (typeof content === 'string' && content.startsWith('http')) {
-    try {
-        const https = require('https');
-        const http = require('http');
-        const client = content.startsWith('https') ? https : http;
-        await new Promise((resolve, reject) => {
-            client.get(content, (response) => {
-                const chunks = [];
-                response.on('data', chunk => chunks.push(chunk));
-                response.on('end', async () => {
-                    await fs.writeFile(dest, Buffer.concat(chunks));
-                    resolve();
-                });
-                response.on('error', reject);
-            }).on('error', reject);
-        });
-    } catch(e) {
-        console.warn(`Failed to download texture: ${content}`);
-        await fs.writeFile(dest, content);
-    }
-} else {
-    await fs.writeFile(dest, content);
-}
+            if (typeof content === 'string' && content.startsWith('data:image')) {
+                // טקסטורה ב-base64 — המר ל-16x16
+                const rawBuffer = Buffer.from(content.split(',')[1], 'base64');
+                if (isTexture) {
+                    try {
+                        const pixelBuffer = await resizeTo16x16(rawBuffer);
+                        await fs.writeFile(dest, pixelBuffer);
+                        log(`Texture resized to 16x16: ${path.basename(dest)}`);
+                    } catch (e) {
+                        // אם ה-resize נכשל — שמור מקורי
+                        await fs.writeFile(dest, rawBuffer);
+                    }
+                } else {
+                    await fs.writeFile(dest, rawBuffer);
+                }
+            } else if (typeof content === 'string' && content.startsWith('http')) {
+                // טקסטורה מ-URL — הורד והמר ל-16x16
+                try {
+                    const https = require('https');
+                    const http = require('http');
+                    const client = content.startsWith('https') ? https : http;
+                    const rawBuffer = await new Promise((resolve, reject) => {
+                        client.get(content, (response) => {
+                            const chunks = [];
+                            response.on('data', chunk => chunks.push(chunk));
+                            response.on('end', () => resolve(Buffer.concat(chunks)));
+                            response.on('error', reject);
+                        }).on('error', reject);
+                    });
+                    if (isTexture) {
+                        try {
+                            const pixelBuffer = await resizeTo16x16(rawBuffer);
+                            await fs.writeFile(dest, pixelBuffer);
+                            log(`Texture downloaded & resized to 16x16: ${path.basename(dest)}`);
+                        } catch (e) {
+                            await fs.writeFile(dest, rawBuffer);
+                        }
+                    } else {
+                        await fs.writeFile(dest, rawBuffer);
+                    }
+                } catch(e) {
+                    console.warn(`Failed to download texture: ${content}`);
+                    await fs.writeFile(dest, content);
+                }
+            } else {
+                await fs.writeFile(dest, content);
+            }
         }
 
         // 4. בדיקת תקינות Gradle Build
