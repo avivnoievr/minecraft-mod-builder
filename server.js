@@ -117,6 +117,22 @@ app.post('/build', async (req, res) => {
             }
         }
 
+        // 4b. Fix common AI typos in all Java files before compilation
+        const { glob } = require('glob');
+        const javaFiles = await glob(tmpDir + '/src/**/*.java');
+        for (const javaFile of javaFiles) {
+            let javaContent = await fs.readFile(javaFile, 'utf8');
+            const before = javaContent;
+            javaContent = javaContent.split('TypedTypedActionResult').join('TypedActionResult');
+            javaContent = javaContent.split('TypedTyped').join('Typed');
+            javaContent = javaContent.split('net.minecraft.util.registry.Registry').join('net.minecraft.registry.Registry');
+            javaContent = javaContent.split('net.minecraft.util.registry.Registries').join('net.minecraft.registry.Registries');
+            if (javaContent !== before) {
+                await fs.writeFile(javaFile, javaContent);
+                log('Fixed Java typos in: ' + path.basename(javaFile));
+            }
+        }
+
         // 4. בדיקת תקינות Gradle Build
         if (!(await fs.pathExists(path.join(tmpDir, 'build.gradle')))) {
             log("CRITICAL ERROR: build.gradle is missing in the source files!");
