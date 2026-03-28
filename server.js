@@ -118,20 +118,24 @@ app.post('/build', async (req, res) => {
         }
 
         // 4b. Fix common AI typos in all Java files before compilation
-        const { glob } = require('glob');
-        const javaFiles = await glob(tmpDir + '/src/**/*.java');
-        for (const javaFile of javaFiles) {
-            let javaContent = await fs.readFile(javaFile, 'utf8');
-            const before = javaContent;
-            javaContent = javaContent.split('TypedTypedActionResult').join('TypedActionResult');
-            javaContent = javaContent.split('TypedTyped').join('Typed');
-            javaContent = javaContent.split('net.minecraft.util.registry.Registry').join('net.minecraft.registry.Registry');
-            javaContent = javaContent.split('net.minecraft.util.registry.Registries').join('net.minecraft.registry.Registries');
-            if (javaContent !== before) {
-                await fs.writeFile(javaFile, javaContent);
-                log('Fixed Java typos in: ' + path.basename(javaFile));
+        async function fixJavaFiles(dir) {
+            const entries = await fs.readdir(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) { await fixJavaFiles(full); }
+                else if (entry.name.endsWith('.java')) {
+                    let c = await fs.readFile(full, 'utf8');
+                    const before = c;
+                    c = c.split('TypedTypedActionResult').join('TypedActionResult');
+                    c = c.split('TypedTyped').join('Typed');
+                    c = c.split('net.minecraft.util.registry.Registry').join('net.minecraft.registry.Registry');
+                    c = c.split('net.minecraft.util.registry.Registries').join('net.minecraft.registry.Registries');
+                    if (c !== before) { await fs.writeFile(full, c); log('Fixed: ' + entry.name); }
+                }
             }
         }
+        const srcDir = path.join(tmpDir, 'src');
+        if (await fs.pathExists(srcDir)) await fixJavaFiles(srcDir);
 
         // 4. בדיקת תקינות Gradle Build
         if (!(await fs.pathExists(path.join(tmpDir, 'build.gradle')))) {
